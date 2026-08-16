@@ -44,6 +44,68 @@ def get_env_vars():
     return GEMINI_API_KEY, NOTION_API_KEY, NOTION_DATABASE_ID
 
 
+def fetch_existing_urls(notion_api_key, database_id):
+    """Fetch all existing URLs from Notion database to prevent duplicates."""
+    headers = {
+        "Authorization": f"Bearer {notion_api_key}",
+        "Notion-Version": NOTION_VERSION,
+        "Content-Type": "application/json",
+    }
+    
+    existing_urls = set()
+    has_more = True
+    start_cursor = None
+    
+    try:
+        while has_more:
+            url = f"https://api.notion.com/v1/databases/{database_id}/query"
+            data = {"page_size": 100}
+            if start_cursor:
+                data["start_cursor"] = start_cursor
+            
+            r = requests.post(url, headers=headers, json=data, timeout=30)
+            if r.status_code != 200:
+                logger.error("Failed to fetch existing URLs: %s %s", r.status_code, r.text)
+                break
+            
+            response = r.json()
+            for result in response.get("results", []):
+                url_prop = result.get("properties", {}).get("URL", {})
+                if url_prop.get("type") == "url":
+                    page_url = url_prop.get("url")
+                    if page_url:
+                        existing_urls.add(page_url)
+            
+            has_more = response.get("has_more", False)
+            start_cursor = response.get("next_cursor")
+        
+        logger.info("Found %d existing URLs in Notion", len(existing_urls))
+    except Exception as e:
+        logger.error("Error fetching existing URLs: %s", e)
+    
+    return existing_urls
+
+
+def deduplicate_entries(entries):
+    """Deduplicate entries by URL."""
+    seen_urls = set()
+    deduped = []
+    
+    for entry in entries:
+        link = entry.get("link", "")
+        if link and link not in seen_urls:
+            seen_urls.add(link)
+            deduped.append(entry)
+        elif not link:
+            # Entries without URL are kept as is
+            deduped.append(entry)
+    
+    if len(entries) > len(deduped):
+        logger.info("Deduplicated %d entries -> %d entries", len(entries), len(deduped))
+    
+    return deduped
+
+
 def fetch_latest_entries(feed_url, limit=2):
     logger.info("Fetching RSS feed: %s", feed_url)
     d = feedparser.parse(feed_url)
@@ -165,11 +227,24 @@ def main():
         logger.error("GenAI client could not be initialized. Exiting.")
         sys.exit(1)
 
+    # Fetch existing URLs from Notion to prevent duplicates
+    existing_urls = fetch_existing_urls(NOTION_API_KEY, NOTION_DATABASE_ID)
+
     for category, feed_url in RSS_FEEDS.items():
         entries = fetch_latest_entries(feed_url, limit=2)
+        
+        # Deduplicate entries from RSS feed itself
+        entries = deduplicate_entries(entries)
+        
         for e in entries:
             title = e["title"] or "(無題)"
             link = e["link"] or ""
+            
+            # Skip if URL already exists in Notion
+            if link and link in existing_urls:
+                logger.info("Skipping duplicate URL: %s", link)
+                continue
+            
             try:
                 summary = generate_summary(generate_func, title, link)
             except Exception as ex:
