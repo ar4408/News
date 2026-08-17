@@ -2,6 +2,8 @@ import os
 import sys
 import logging
 import time
+import json
+import re
 from datetime import datetime, timedelta, timezone
 
 import feedparser
@@ -97,7 +99,6 @@ def deduplicate_entries(entries):
             seen_urls.add(link)
             deduped.append(entry)
         elif not link:
-            # Entries without URL are kept as is
             deduped.append(entry)
     
     if len(entries) > len(deduped):
@@ -106,7 +107,7 @@ def deduplicate_entries(entries):
     return deduped
 
 
-def fetch_latest_entries(feed_url, limit=2):
+def fetch_latest_entries(feed_url, limit=5):
     logger.info("Fetching RSS feed: %s", feed_url)
     d = feedparser.parse(feed_url)
     entries = []
@@ -120,10 +121,6 @@ def fetch_latest_entries(feed_url, limit=2):
 
 
 def init_genai_client(api_key):
-    """Initialize GenAI client using the new `google-genai` package.
-
-    Returns a `generate(prompt)` function or `None` on failure.
-    """
     try:
         from google import genai
 
@@ -135,7 +132,6 @@ def init_genai_client(api_key):
     def generate(prompt):
         try:
             response = client.models.generate_content(model=GENAI_MODEL, contents=prompt)
-            # Prefer `.text` if available; fall back to string form
             return getattr(response, "text", None) or str(response)
         except Exception:
             logger.exception("GenAI generation failed")
@@ -145,37 +141,31 @@ def init_genai_client(api_key):
 
 
 def generate_detailed_content(generate_func, title, url):
-    """Generate detailed summary and background knowledge for the article."""
+    """Generate structured analysis based on efficiency elements."""
     prompt = (
-        f"以下のニュース記事について、詳細な解説を日本語で作成してください。\n"
+        f"以下のニュース記事について、短時間で深く理解するための構造化分析を行ってください。\n"
         f"記事タイトル: {title}\n"
         f"URL: {url}\n\n"
-        "以下の4つの要素を分析して抽出してください。JSON形式で返してください。\n\n"
-        "1. 【詳細要約】\n"
-        "   - ニュースの背景や文脈\n"
-        "   - 具体的な数値や事実\n"
-        "   - 今後の影響や課題\n"
-        "   - 200～400文字程度\n\n"
-        "2. 【補足・背景知識・用語解説】\n"
-        "   - 記事に出てくる専門用語の説明\n"
-        "   - 業界の背景知識\n"
-        "   - 初心者向けの補足説明\n"
-        "   - 箇条書き形式（3～5項目）\n\n"
-        "3. 【重要度】\n"
-        "   - 記事の重要度を「★1」「★2」「★3」のいずれかで判定\n"
-        "   - ★3: 重要性が極めて高い（業界・キャリア・経済全体への大きな影響）\n"
-        "   - ★2: 中程度の重要性（注目すべき動き、トレンド、施策）\n"
-        "   - ★1: 参考程度（軽微な更新、ニッチなトピック）\n\n"
-        "4. 【関連テーマ】\n"
-        "   - 最大3つまでのタグを選択\n"
-        "   - 候補: 「生成AI」「基盤モデル」「マクロ経済」「IT業界」「キャリア」「スタートアップ」「ガバナンス」「セキュリティ」\n"
-        "   - タグは正確にカテゴリ名を返してください\n\n"
-        "必ずJSONのみを返してください（マークダウン記号なし）。以下の構造で返してください:\n"
+        "以下の項目を解析し、必ずJSON形式のみで出力してください（マークダウン記号は含めないでください）。\n\n"
+        "1. 【結論】: 1〜2文で最重要ファクトを記述（\"conclusion\"）\n"
+        "2. 【背景】: 事象の経緯や背景を箇条書き2〜3項目で記述（\"background\"）\n"
+        "3. 【影響】: 業界・技術・経済への波及効果を箇条書き2〜3項目で記述（\"impact\"）\n"
+        "4. 【キー数値・ファクト】: 金額、割合、件数などの重要な数値を箇条書きで抽出（\"key_numbers\"）\n"
+        "5. 【事実と意見の整理】: 「事実（確定事項）」と「意見・予測」を区別して記述（\"fact_and_opinion\"）\n"
+        "6. 【専門用語・背景解説】: 重要な用語や解説（箇条書き2〜3項目）（\"glossary\"）\n"
+        "7. 【重要度】: 「★1」「★2」「★3」のいずれかで判定（\"importance\"）\n"
+        "8. 【関連テーマ】: 最大3つまでのタグ（\"related_themes\"）\n"
+        "   候補: 「生成AI」「基盤モデル」「マクロ経済」「IT業界」「キャリア」「スタートアップ」「ガバナンス」「セキュリティ」\n\n"
+        "出力フォーマット（JSONのみ）:\n"
         '{\n'
-        '  "detailed_summary": "詳細要約テキスト",\n'
-        '  "background_knowledge": ["項目1", "項目2", "項目3"],\n'
+        '  "conclusion": "結論テキスト",\n'
+        '  "background": ["背景1", "背景2"],\n'
+        '  "impact": ["影響1", "影響2"],\n'
+        '  "key_numbers": ["数値データ1", "数値データ2"],\n'
+        '  "fact_and_opinion": {"fact": ["事実1"], "opinion": ["意見・予測1"]},\n'
+        '  "glossary": ["用語解説1", "用語解説2"],\n'
         '  "importance": "★2",\n'
-        '  "related_themes": ["テーマ1", "テーマ2"]\n'
+        '  "related_themes": ["生成AI", "IT業界"]\n'
         '}\n'
     )
     logger.info("Generating detailed content for: %s", title)
@@ -183,100 +173,178 @@ def generate_detailed_content(generate_func, title, url):
     if not resp:
         logger.error("Empty response from GenAI for title: %s", title)
         return {
-            "detailed_summary": "",
-            "background_knowledge": [],
+            "conclusion": title,
+            "background": [],
+            "impact": [],
+            "key_numbers": [],
+            "fact_and_opinion": {"fact": [], "opinion": []},
+            "glossary": [],
             "importance": "★2",
-            "related_themes": ["IT・テクノロジー"]
+            "related_themes": ["IT業界"]
         }
     
-    # Try to parse JSON response
     try:
-        import json
-        import re
-        
-        # Remove markdown code blocks (```json ... ```)
         cleaned_resp = re.sub(r'```\s*json\s*', '', resp, flags=re.IGNORECASE)
-        cleaned_resp = re.sub(r'```\s*', '', cleaned_resp)
-        cleaned_resp = cleaned_resp.strip()
+        cleaned_resp = re.sub(r'```\s*', '', cleaned_resp).strip()
         
-        # Extract JSON from response (in case there's extra text)
         json_start = cleaned_resp.find('{')
         json_end = cleaned_resp.rfind('}') + 1
         if json_start >= 0 and json_end > json_start:
             json_str = cleaned_resp[json_start:json_end]
             content = json.loads(json_str)
             
-            # Ensure default values exist
-            if "importance" not in content or not content.get("importance"):
-                content["importance"] = "★2"
-            if "related_themes" not in content or not content.get("related_themes"):
-                content["related_themes"] = ["IT・テクノロジー"]
-            if "background_knowledge" not in content:
-                content["background_knowledge"] = []
-            if "detailed_summary" not in content:
-                content["detailed_summary"] = ""
+            content.setdefault("conclusion", title)
+            content.setdefault("background", [])
+            content.setdefault("impact", [])
+            content.setdefault("key_numbers", [])
+            content.setdefault("fact_and_opinion", {"fact": [], "opinion": []})
+            content.setdefault("glossary", [])
+            content.setdefault("importance", "★2")
+            content.setdefault("related_themes", ["IT業界"])
             
-            logger.info("Generated detailed content for: %s (importance: %s, themes: %s)", 
-                       title, content.get("importance"), content.get("related_themes"))
+            logger.info("Generated detailed content for: %s (importance: %s)", title, content.get("importance"))
             return content
     except Exception as e:
-        logger.warning("Failed to parse JSON response: %s. Raw response: %s", e, resp[:200])
+        logger.warning("Failed to parse JSON response: %s", e)
     
-    # Fallback: return structure with default values
     return {
-        "detailed_summary": resp,
-        "background_knowledge": [],
+        "conclusion": title,
+        "background": [resp],
+        "impact": [],
+        "key_numbers": [],
+        "fact_and_opinion": {"fact": [], "opinion": []},
+        "glossary": [],
         "importance": "★2",
-        "related_themes": ["IT・テクノロジー"]
+        "related_themes": ["IT業界"]
     }
 
 
-def build_notion_blocks(detailed_content):
-    """Build Notion blocks containing only AI-generated article analysis content."""
+def build_notion_blocks(content):
+    """Build Notion blocks with structured analysis, strictly excluding manual entry spaces."""
     blocks = []
+    
+    # 1. 結論 Callout
+    conclusion = content.get("conclusion", "")
+    if conclusion:
+        blocks.append({
+            "object": "block",
+            "type": "callout",
+            "callout": {
+                "rich_text": [
+                    {"type": "text", "text": {"content": "📌 結論（要点）: "}, "annotations": {"bold": True}},
+                    {"type": "text", "text": {"content": conclusion}}
+                ],
+                "icon": {"emoji": "⚡"},
+                "color": "blue_background"
+            }
+        })
+    
+    # 2. 構造分析 Toggle
+    toggle_children = []
+    
+    # 背景
+    background = content.get("background", [])
+    if background:
+        toggle_children.append({
+            "object": "block",
+            "type": "heading_3",
+            "heading_3": {"rich_text": [{"type": "text", "text": {"content": "🔍 背景・経緯"}}]}
+        })
+        for item in background:
+            toggle_children.append({
+                "object": "block",
+                "type": "bulleted_list_item",
+                "bulleted_list_item": {"rich_text": [{"type": "text", "text": {"content": item}}]}
+            })
 
-    summary_text = detailed_content.get("detailed_summary", "") or "要約を生成できませんでした。"
-    background_items = detailed_content.get("background_knowledge", []) or []
+    # 影響
+    impact = content.get("impact", [])
+    if impact:
+        toggle_children.append({
+            "object": "block",
+            "type": "heading_3",
+            "heading_3": {"rich_text": [{"type": "text", "text": {"content": "🚀 今後の影響・波及効果"}}]}
+        })
+        for item in impact:
+            toggle_children.append({
+                "object": "block",
+                "type": "bulleted_list_item",
+                "bulleted_list_item": {"rich_text": [{"type": "text", "text": {"content": item}}]}
+            })
 
-    blocks.append({
-        "object": "block",
-        "type": "heading_2",
-        "heading_2": {
-            "rich_text": [{"type": "text", "text": {"content": "要点・詳細要約"}}]
-        }
-    })
+    # キー数値
+    key_numbers = content.get("key_numbers", [])
+    if key_numbers:
+        toggle_children.append({
+            "object": "block",
+            "type": "heading_3",
+            "heading_3": {"rich_text": [{"type": "text", "text": {"content": "📊 主要な数値・ファクト"}}]}
+        })
+        for item in key_numbers:
+            toggle_children.append({
+                "object": "block",
+                "type": "bulleted_list_item",
+                "bulleted_list_item": {"rich_text": [{"type": "text", "text": {"content": item}}]}
+            })
 
-    blocks.append({
-        "object": "block",
-        "type": "paragraph",
-        "paragraph": {
-            "rich_text": [{"type": "text", "text": {"content": summary_text}}]
-        }
-    })
-
-    blocks.append({
-        "object": "block",
-        "type": "heading_2",
-        "heading_2": {
-            "rich_text": [{"type": "text", "text": {"content": "補足・背景知識・用語解説"}}]
-        }
-    })
-
-    if background_items:
-        for item in background_items:
-            blocks.append({
+    # 事実 vs 意見
+    fo = content.get("fact_and_opinion", {})
+    facts = fo.get("fact", []) if isinstance(fo, dict) else []
+    opinions = fo.get("opinion", []) if isinstance(fo, dict) else []
+    if facts or opinions:
+        toggle_children.append({
+            "object": "block",
+            "type": "heading_3",
+            "heading_3": {"rich_text": [{"type": "text", "text": {"content": "⚖️ 事実（Fact）と意見（Opinion）の整理"}}]}
+        })
+        for f in facts:
+            toggle_children.append({
                 "object": "block",
                 "type": "bulleted_list_item",
                 "bulleted_list_item": {
-                    "rich_text": [{"type": "text", "text": {"content": item}}]
+                    "rich_text": [
+                        {"type": "text", "text": {"content": "[事実] "}, "annotations": {"bold": True, "color": "green"}},
+                        {"type": "text", "text": {"content": f}}
+                    ]
                 }
             })
-    else:
+        for o in opinions:
+            toggle_children.append({
+                "object": "block",
+                "type": "bulleted_list_item",
+                "bulleted_list_item": {
+                    "rich_text": [
+                        {"type": "text", "text": {"content": "[意見/予測] "}, "annotations": {"bold": True, "color": "orange"}},
+                        {"type": "text", "text": {"content": o}}
+                    ]
+                }
+            })
+
+    blocks.append({
+        "object": "block",
+        "type": "toggle",
+        "toggle": {
+            "rich_text": [{"type": "text", "text": {"content": "📄 構造化要約・背景分析"}}],
+            "children": toggle_children
+        }
+    })
+
+    # 3. 用語解説 Toggle
+    glossary = content.get("glossary", [])
+    if glossary:
+        glossary_children = []
+        for item in glossary:
+            glossary_children.append({
+                "object": "block",
+                "type": "bulleted_list_item",
+                "bulleted_list_item": {"rich_text": [{"type": "text", "text": {"content": item}}]}
+            })
         blocks.append({
             "object": "block",
-            "type": "paragraph",
-            "paragraph": {
-                "rich_text": [{"type": "text", "text": {"content": "背景知識は生成されませんでした。"}}]
+            "type": "toggle",
+            "toggle": {
+                "rich_text": [{"type": "text", "text": {"content": "💡 専門用語・補足解説"}}],
+                "children": glossary_children
             }
         })
 
@@ -293,21 +361,17 @@ def create_notion_page(notion_api_key, database_id, title, url, category, detail
     jst = timezone(timedelta(hours=9))
     today = datetime.now(jst).date().isoformat()
 
-    # Build content blocks
     children = build_notion_blocks(detailed_content)
 
-    # Extract properties from detailed_content with validation
     importance = detailed_content.get("importance", "★2") or "★2"
-    related_themes = detailed_content.get("related_themes", []) or ["IT・テクノロジー"]
+    related_themes = detailed_content.get("related_themes", []) or ["IT業界"]
     
-    # Ensure related_themes is a list and contains valid strings
     if not isinstance(related_themes, list):
         related_themes = [related_themes]
     related_themes = [str(t).strip() for t in related_themes if t]
     if not related_themes:
-        related_themes = ["IT・テクノロジー"]
+        related_themes = ["IT業界"]
 
-    # Build properties
     properties = {
         "名前": {"title": [{"text": {"content": title}}]},
         "URL": {"url": url},
@@ -343,20 +407,16 @@ def main():
         logger.error("GenAI client could not be initialized. Exiting.")
         sys.exit(1)
 
-    # Fetch existing URLs from Notion to prevent duplicates
     existing_urls = fetch_existing_urls(NOTION_API_KEY, NOTION_DATABASE_ID)
 
     for category, feed_url in RSS_FEEDS.items():
-        entries = fetch_latest_entries(feed_url, limit=2)
-        
-        # Deduplicate entries from RSS feed itself
+        entries = fetch_latest_entries(feed_url, limit=5)
         entries = deduplicate_entries(entries)
         
         for e in entries:
             title = e["title"] or "(無題)"
             link = e["link"] or ""
             
-            # Skip if URL already exists in Notion
             if link and link in existing_urls:
                 logger.info("Skipping duplicate URL: %s", link)
                 continue
@@ -365,7 +425,7 @@ def main():
                 detailed_content = generate_detailed_content(generate_func, title, link)
             except Exception as ex:
                 logger.exception("Error generating content for %s: %s", title, ex)
-                detailed_content = {"detailed_summary": "", "background_knowledge": []}
+                detailed_content = {"conclusion": title}
 
             try:
                 ok = create_notion_page(NOTION_API_KEY, NOTION_DATABASE_ID, title, link, category, detailed_content)
@@ -374,7 +434,7 @@ def main():
             except Exception as ex:
                 logger.exception("Error creating Notion page for %s: %s", title, ex)
 
-            time.sleep(1)  # gentle pacing between items
+            time.sleep(1)
 
     logger.info("All done.")
 
