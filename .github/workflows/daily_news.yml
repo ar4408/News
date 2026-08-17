@@ -8,9 +8,6 @@ on:
 jobs:
   run:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: ./news-automator
     env:
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       NOTION_API_KEY: ${{ secrets.NOTION_API_KEY }}
