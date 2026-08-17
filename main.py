@@ -232,49 +232,39 @@ def generate_detailed_content(generate_func, title, url):
 
 
 def build_notion_blocks(detailed_content):
-    """Build Notion blocks from detailed content with toggle structure."""
+    """Build Notion blocks containing only AI-generated article analysis content."""
     blocks = []
-    
-    # Introductory text
+
+    summary_text = detailed_content.get("detailed_summary", "") or "要約を生成できませんでした。"
+    background_items = detailed_content.get("background_knowledge", []) or []
+
+    blocks.append({
+        "object": "block",
+        "type": "heading_2",
+        "heading_2": {
+            "rich_text": [{"type": "text", "text": {"content": "要点・詳細要約"}}]
+        }
+    })
+
     blocks.append({
         "object": "block",
         "type": "paragraph",
         "paragraph": {
-            "rich_text": [
-                {"type": "text", "text": {"content": "🧠 読む前の思考"}, "annotations": {"bold": True}},
-                {"type": "text", "text": {"content": "（タイトルから背景や影響を1秒だけ推測してみよう）"}}
-            ]
+            "rich_text": [{"type": "text", "text": {"content": summary_text}}]
         }
     })
-    
-    # Toggle: 詳細要約
-    summary_text = detailed_content.get("detailed_summary", "")
-    toggle_children_summary = []
-    if summary_text:
-        toggle_children_summary.append({
-            "object": "block",
-            "type": "paragraph",
-            "paragraph": {
-                "rich_text": [{"type": "text", "text": {"content": summary_text}}]
-            }
-        })
-    
+
     blocks.append({
         "object": "block",
-        "type": "toggle",
-        "toggle": {
-            "rich_text": [{"type": "text", "text": {"content": "📄 詳細要約"}}],
-            "children": toggle_children_summary
+        "type": "heading_2",
+        "heading_2": {
+            "rich_text": [{"type": "text", "text": {"content": "補足・背景知識・用語解説"}}]
         }
     })
-    
-    # Toggle: 補足・背景知識・用語解説
-    background_items = detailed_content.get("background_knowledge", [])
-    toggle_children_background = []
-    
+
     if background_items:
         for item in background_items:
-            toggle_children_background.append({
+            blocks.append({
                 "object": "block",
                 "type": "bulleted_list_item",
                 "bulleted_list_item": {
@@ -282,65 +272,14 @@ def build_notion_blocks(detailed_content):
                 }
             })
     else:
-        toggle_children_background.append({
+        blocks.append({
             "object": "block",
             "type": "paragraph",
             "paragraph": {
-                "rich_text": [{"type": "text", "text": {"content": "（背景知識なし）"}}]
+                "rich_text": [{"type": "text", "text": {"content": "背景知識は生成されませんでした。"}}]
             }
         })
-    
-    blocks.append({
-        "object": "block",
-        "type": "toggle",
-        "toggle": {
-            "rich_text": [{"type": "text", "text": {"content": "💡 補足・背景知識・用語解説"}}],
-            "children": toggle_children_background
-        }
-    })
-    
-    # Callout: 思考アウトプット
-    blocks.append({
-        "object": "block",
-        "type": "callout",
-        "callout": {
-            "rich_text": [
-                {"type": "text", "text": {"content": "✍️ 思考アウトプット"}, "annotations": {"bold": True}},
-                {"type": "text", "text": {"content": "（My Take & So What?）"}}
-            ],
-            "icon": {"emoji": "✍️"},
-            "color": "purple_background"
-        }
-    })
-    
-    # Callout content: 想定とのギャップ・発見
-    blocks.append({
-        "object": "block",
-        "type": "callout",
-        "callout": {
-            "rich_text": [
-                {"type": "text", "text": {"content": "💡 "}, "annotations": {}},
-                {"type": "text", "text": {"content": "想定とのギャップ・発見"}, "annotations": {"bold": True}}
-            ],
-            "icon": {"emoji": "💡"},
-            "color": "blue_background"
-        }
-    })
-    
-    # Callout content: So What?（自分・業務への影響/活かせること）
-    blocks.append({
-        "object": "block",
-        "type": "callout",
-        "callout": {
-            "rich_text": [
-                {"type": "text", "text": {"content": "🚀 "}, "annotations": {}},
-                {"type": "text", "text": {"content": "So What?（自分・業務への影響/活かせること）"}, "annotations": {"bold": True}}
-            ],
-            "icon": {"emoji": "🚀"},
-            "color": "yellow_background"
-        }
-    })
-    
+
     return blocks
 
 
