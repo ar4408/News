@@ -374,7 +374,6 @@ def create_notion_page(notion_api_key, database_id, title, url, category, detail
         "URL": {"url": url},
         "カテゴリ": {"select": {"name": category}},
         "日付": {"date": {"start": today}},
-        "ステータス": {"status": {"name": "未読"}},
         "重要度": {"select": {"name": importance}},
         "関連テーマ": {
             "multi_select": [{"name": theme} for theme in related_themes]
