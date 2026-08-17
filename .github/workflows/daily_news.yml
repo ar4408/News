@@ -3,7 +3,7 @@ name: Daily News
 on:
   workflow_dispatch: {}
   schedule:
-    - cron: '0 22 * * *' # Daily at 22:00 UTC -> 07:00 JST
+    - cron: '5 22 * * *' # Daily at 22:05 UTC -> 07:05 JST (混雑回避のため5分ずらしています)
 
 jobs:
   run:
@@ -14,10 +14,10 @@ jobs:
       NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v4
 
       - name: Setup Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v5
         with:
           python-version: '3.13'
 
