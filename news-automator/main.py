@@ -170,11 +170,11 @@ def generate_detailed_content(generate_func, title, url):
         "   - 最大3つまでのタグを選択\n"
         "   - 候補: 「生成AI」「基盤モデル」「マクロ経済」「IT業界」「キャリア」「スタートアップ」「ガバナンス」「セキュリティ」\n"
         "   - タグは正確にカテゴリ名を返してください\n\n"
-        "JSON形式で、以下の構造で返してください（他のテキストは含めない）:\n"
+        "必ずJSONのみを返してください（マークダウン記号なし）。以下の構造で返してください:\n"
         '{\n'
         '  "detailed_summary": "詳細要約テキスト",\n'
         '  "background_knowledge": ["項目1", "項目2", "項目3"],\n'
-        '  "importance": "★1",\n'
+        '  "importance": "★2",\n'
         '  "related_themes": ["テーマ1", "テーマ2"]\n'
         '}\n'
     )
@@ -186,29 +186,48 @@ def generate_detailed_content(generate_func, title, url):
             "detailed_summary": "",
             "background_knowledge": [],
             "importance": "★2",
-            "related_themes": []
+            "related_themes": ["IT・テクノロジー"]
         }
     
     # Try to parse JSON response
     try:
         import json
+        import re
+        
+        # Remove markdown code blocks (```json ... ```)
+        cleaned_resp = re.sub(r'```\s*json\s*', '', resp, flags=re.IGNORECASE)
+        cleaned_resp = re.sub(r'```\s*', '', cleaned_resp)
+        cleaned_resp = cleaned_resp.strip()
+        
         # Extract JSON from response (in case there's extra text)
-        json_start = resp.find('{')
-        json_end = resp.rfind('}') + 1
+        json_start = cleaned_resp.find('{')
+        json_end = cleaned_resp.rfind('}') + 1
         if json_start >= 0 and json_end > json_start:
-            json_str = resp[json_start:json_end]
+            json_str = cleaned_resp[json_start:json_end]
             content = json.loads(json_str)
-            logger.info("Generated detailed content for: %s", title)
+            
+            # Ensure default values exist
+            if "importance" not in content or not content.get("importance"):
+                content["importance"] = "★2"
+            if "related_themes" not in content or not content.get("related_themes"):
+                content["related_themes"] = ["IT・テクノロジー"]
+            if "background_knowledge" not in content:
+                content["background_knowledge"] = []
+            if "detailed_summary" not in content:
+                content["detailed_summary"] = ""
+            
+            logger.info("Generated detailed content for: %s (importance: %s, themes: %s)", 
+                       title, content.get("importance"), content.get("related_themes"))
             return content
     except Exception as e:
-        logger.warning("Failed to parse JSON response: %s", e)
+        logger.warning("Failed to parse JSON response: %s. Raw response: %s", e, resp[:200])
     
     # Fallback: return structure with default values
     return {
         "detailed_summary": resp,
         "background_knowledge": [],
         "importance": "★2",
-        "related_themes": []
+        "related_themes": ["IT・テクノロジー"]
     }
 
 
@@ -338,9 +357,16 @@ def create_notion_page(notion_api_key, database_id, title, url, category, detail
     # Build content blocks
     children = build_notion_blocks(detailed_content)
 
-    # Extract properties from detailed_content
-    importance = detailed_content.get("importance", "★2")
-    related_themes = detailed_content.get("related_themes", [])
+    # Extract properties from detailed_content with validation
+    importance = detailed_content.get("importance", "★2") or "★2"
+    related_themes = detailed_content.get("related_themes", []) or ["IT・テクノロジー"]
+    
+    # Ensure related_themes is a list and contains valid strings
+    if not isinstance(related_themes, list):
+        related_themes = [related_themes]
+    related_themes = [str(t).strip() for t in related_themes if t]
+    if not related_themes:
+        related_themes = ["IT・テクノロジー"]
 
     # Build properties
     properties = {
@@ -350,13 +376,10 @@ def create_notion_page(notion_api_key, database_id, title, url, category, detail
         "日付": {"date": {"start": today}},
         "ステータス": {"status": {"name": "未読"}},
         "重要度": {"select": {"name": importance}},
-    }
-
-    # Add related themes as multi-select
-    if related_themes:
-        properties["関連テーマ"] = {
+        "関連テーマ": {
             "multi_select": [{"name": theme} for theme in related_themes]
         }
+    }
 
     data = {
         "parent": {"database_id": database_id},
@@ -364,7 +387,8 @@ def create_notion_page(notion_api_key, database_id, title, url, category, detail
         "children": children,
     }
 
-    logger.info("Creating Notion page for: %s", title)
+    logger.info("Creating Notion page for: %s (importance: %s, themes: %s)", 
+               title, importance, related_themes)
     r = requests.post(NOTION_API_URL, headers=headers, json=data, timeout=30)
     if r.status_code not in (200, 201):
         logger.error("Failed to create Notion page: %s %s", r.status_code, r.text)
