@@ -144,41 +144,111 @@ def init_genai_client(api_key):
     return generate
 
 
-def generate_summary(generate_func, title, url):
+def generate_detailed_content(generate_func, title, url):
+    """Generate detailed summary and background knowledge for the article."""
     prompt = (
-        f"以下の制約で日本語の要約を作成してください。\n"
+        f"以下のニュース記事について、詳細な解説を日本語で作成してください。\n"
         f"記事タイトル: {title}\n"
         f"URL: {url}\n\n"
-        "制約:\n"
-        "- 箇条書きを3つ出力すること。\n"
-        "- 各箇条書きは40文字以内に収めること。\n"
-        "- 箇条書きは1行に1つ、先頭を" + '・' + "で始めること。\n"
-        "- 余計な説明は付けず、箇条書きのみを出力すること。\n"
+        "以下の2つの部分に分けて出力してください。JSON形式で返してください。\n\n"
+        "1. 【詳細要約】\n"
+        "   - ニュースの背景や文脈\n"
+        "   - 具体的な数値や事実\n"
+        "   - 今後の影響や課題\n"
+        "   - 200～400文字程度\n\n"
+        "2. 【補足・背景知識・用語解説】\n"
+        "   - 記事に出てくる専門用語の説明\n"
+        "   - 業界の背景知識\n"
+        "   - 初心者向けの補足説明\n"
+        "   - 箇条書き形式（3～5項目）\n\n"
+        "JSON形式で、以下の構造で返してください（他のテキストは含めない）:\n"
+        '{\n'
+        '  "detailed_summary": "詳細要約テキスト",\n'
+        '  "background_knowledge": ["項目1", "項目2", "項目3", ...]\n'
+        '}\n'
     )
-    logger.info("Generating summary for: %s", title)
+    logger.info("Generating detailed content for: %s", title)
     resp = generate_func(prompt)
     if not resp:
         logger.error("Empty response from GenAI for title: %s", title)
-        return ""
-    # Post-process: keep only three lines and ensure they are short
-    lines = [ln.strip() for ln in resp.splitlines() if ln.strip()]
-    # Take first 3 non-empty lines
-    bullets = lines[:3]
-    # If they don't start with ・, normalize
-    normalized = []
-    for b in bullets:
-        if not b.startswith("・"):
-            b = "・" + b.lstrip("- ")
-        # Truncate to 40 chars
-        if len(b) > 40:
-            b = b[:37] + "..."
-        normalized.append(b)
-    summary_text = "\n".join(normalized)
-    logger.info("Generated summary:\n%s", summary_text)
-    return summary_text
+        return {"detailed_summary": "", "background_knowledge": []}
+    
+    # Try to parse JSON response
+    try:
+        import json
+        # Extract JSON from response (in case there's extra text)
+        json_start = resp.find('{')
+        json_end = resp.rfind('}') + 1
+        if json_start >= 0 and json_end > json_start:
+            json_str = resp[json_start:json_end]
+            content = json.loads(json_str)
+            logger.info("Generated detailed content for: %s", title)
+            return content
+    except Exception as e:
+        logger.warning("Failed to parse JSON response: %s", e)
+    
+    # Fallback: return empty structure
+    return {"detailed_summary": resp, "background_knowledge": []}
 
 
-def create_notion_page(notion_api_key, database_id, title, url, category, summary_text):
+def build_notion_blocks(detailed_content):
+    """Build Notion blocks from detailed content."""
+    blocks = []
+    
+    # Heading: 詳細要約
+    blocks.append({
+        "object": "block",
+        "type": "heading_2",
+        "heading_2": {
+            "rich_text": [{"type": "text", "text": {"content": "詳細要約"}}]
+        }
+    })
+    
+    # Paragraph: 詳細要約テキスト
+    summary_text = detailed_content.get("detailed_summary", "")
+    if summary_text:
+        blocks.append({
+            "object": "block",
+            "type": "paragraph",
+            "paragraph": {
+                "rich_text": [{"type": "text", "text": {"content": summary_text}}]
+            }
+        })
+    
+    # Heading: 補足・背景知識・用語解説
+    blocks.append({
+        "object": "block",
+        "type": "heading_2",
+        "heading_2": {
+            "rich_text": [{"type": "text", "text": {"content": "補足・背景知識・用語解説"}}]
+        }
+    })
+    
+    # Bulleted list: 背景知識項目
+    background_items = detailed_content.get("background_knowledge", [])
+    if background_items:
+        for item in background_items:
+            blocks.append({
+                "object": "block",
+                "type": "bulleted_list_item",
+                "bulleted_list_item": {
+                    "rich_text": [{"type": "text", "text": {"content": item}}]
+                }
+            })
+    else:
+        # Add empty paragraph if no items
+        blocks.append({
+            "object": "block",
+            "type": "paragraph",
+            "paragraph": {
+                "rich_text": [{"type": "text", "text": {"content": "（背景知識なし）"}}]
+            }
+        })
+    
+    return blocks
+
+
+def create_notion_page(notion_api_key, database_id, title, url, category, detailed_content):
     headers = {
         "Authorization": f"Bearer {notion_api_key}",
         "Notion-Version": NOTION_VERSION,
@@ -188,6 +258,9 @@ def create_notion_page(notion_api_key, database_id, title, url, category, summar
     jst = timezone(timedelta(hours=9))
     today = datetime.now(jst).date().isoformat()
 
+    # Build content blocks
+    children = build_notion_blocks(detailed_content)
+
     data = {
         "parent": {"database_id": database_id},
         "properties": {
@@ -196,18 +269,7 @@ def create_notion_page(notion_api_key, database_id, title, url, category, summar
             "カテゴリ": {"select": {"name": category}},
             "日付": {"date": {"start": today}},
         },
-        "children": [
-            {
-                "object": "block",
-                "type": "heading_3",
-                "heading_3": {"rich_text": [{"type": "text", "text": {"content": "AI要約"}}]},
-            },
-            {
-                "object": "block",
-                "type": "paragraph",
-                "paragraph": {"rich_text": [{"type": "text", "text": {"content": summary_text}}]},
-            },
-        ],
+        "children": children,
     }
 
     logger.info("Creating Notion page for: %s", title)
@@ -246,13 +308,13 @@ def main():
                 continue
             
             try:
-                summary = generate_summary(generate_func, title, link)
+                detailed_content = generate_detailed_content(generate_func, title, link)
             except Exception as ex:
-                logger.exception("Error generating summary for %s: %s", title, ex)
-                summary = ""
+                logger.exception("Error generating content for %s: %s", title, ex)
+                detailed_content = {"detailed_summary": "", "background_knowledge": []}
 
             try:
-                ok = create_notion_page(NOTION_API_KEY, NOTION_DATABASE_ID, title, link, category, summary)
+                ok = create_notion_page(NOTION_API_KEY, NOTION_DATABASE_ID, title, link, category, detailed_content)
                 if not ok:
                     logger.error("Failed to push to Notion for: %s", title)
             except Exception as ex:
