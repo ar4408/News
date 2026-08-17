@@ -150,7 +150,7 @@ def generate_detailed_content(generate_func, title, url):
         f"以下のニュース記事について、詳細な解説を日本語で作成してください。\n"
         f"記事タイトル: {title}\n"
         f"URL: {url}\n\n"
-        "以下の2つの部分に分けて出力してください。JSON形式で返してください。\n\n"
+        "以下の4つの要素を分析して抽出してください。JSON形式で返してください。\n\n"
         "1. 【詳細要約】\n"
         "   - ニュースの背景や文脈\n"
         "   - 具体的な数値や事実\n"
@@ -161,17 +161,33 @@ def generate_detailed_content(generate_func, title, url):
         "   - 業界の背景知識\n"
         "   - 初心者向けの補足説明\n"
         "   - 箇条書き形式（3～5項目）\n\n"
+        "3. 【重要度】\n"
+        "   - 記事の重要度を「★1」「★2」「★3」のいずれかで判定\n"
+        "   - ★3: 重要性が極めて高い（業界・キャリア・経済全体への大きな影響）\n"
+        "   - ★2: 中程度の重要性（注目すべき動き、トレンド、施策）\n"
+        "   - ★1: 参考程度（軽微な更新、ニッチなトピック）\n\n"
+        "4. 【関連テーマ】\n"
+        "   - 最大3つまでのタグを選択\n"
+        "   - 候補: 「生成AI」「基盤モデル」「マクロ経済」「IT業界」「キャリア」「スタートアップ」「ガバナンス」「セキュリティ」\n"
+        "   - タグは正確にカテゴリ名を返してください\n\n"
         "JSON形式で、以下の構造で返してください（他のテキストは含めない）:\n"
         '{\n'
         '  "detailed_summary": "詳細要約テキスト",\n'
-        '  "background_knowledge": ["項目1", "項目2", "項目3", ...]\n'
+        '  "background_knowledge": ["項目1", "項目2", "項目3"],\n'
+        '  "importance": "★1",\n'
+        '  "related_themes": ["テーマ1", "テーマ2"]\n'
         '}\n'
     )
     logger.info("Generating detailed content for: %s", title)
     resp = generate_func(prompt)
     if not resp:
         logger.error("Empty response from GenAI for title: %s", title)
-        return {"detailed_summary": "", "background_knowledge": []}
+        return {
+            "detailed_summary": "",
+            "background_knowledge": [],
+            "importance": "★2",
+            "related_themes": []
+        }
     
     # Try to parse JSON response
     try:
@@ -187,27 +203,36 @@ def generate_detailed_content(generate_func, title, url):
     except Exception as e:
         logger.warning("Failed to parse JSON response: %s", e)
     
-    # Fallback: return empty structure
-    return {"detailed_summary": resp, "background_knowledge": []}
+    # Fallback: return structure with default values
+    return {
+        "detailed_summary": resp,
+        "background_knowledge": [],
+        "importance": "★2",
+        "related_themes": []
+    }
 
 
 def build_notion_blocks(detailed_content):
-    """Build Notion blocks from detailed content."""
+    """Build Notion blocks from detailed content with toggle structure."""
     blocks = []
     
-    # Heading: 詳細要約
+    # Introductory text
     blocks.append({
         "object": "block",
-        "type": "heading_2",
-        "heading_2": {
-            "rich_text": [{"type": "text", "text": {"content": "詳細要約"}}]
+        "type": "paragraph",
+        "paragraph": {
+            "rich_text": [
+                {"type": "text", "text": {"content": "🧠 読む前の思考"}, "annotations": {"bold": True}},
+                {"type": "text", "text": {"content": "（タイトルから背景や影響を1秒だけ推測してみよう）"}}
+            ]
         }
     })
     
-    # Paragraph: 詳細要約テキスト
+    # Toggle: 詳細要約
     summary_text = detailed_content.get("detailed_summary", "")
+    toggle_children_summary = []
     if summary_text:
-        blocks.append({
+        toggle_children_summary.append({
             "object": "block",
             "type": "paragraph",
             "paragraph": {
@@ -215,20 +240,22 @@ def build_notion_blocks(detailed_content):
             }
         })
     
-    # Heading: 補足・背景知識・用語解説
     blocks.append({
         "object": "block",
-        "type": "heading_2",
-        "heading_2": {
-            "rich_text": [{"type": "text", "text": {"content": "補足・背景知識・用語解説"}}]
+        "type": "toggle",
+        "toggle": {
+            "rich_text": [{"type": "text", "text": {"content": "📄 詳細要約"}}],
+            "children": toggle_children_summary
         }
     })
     
-    # Bulleted list: 背景知識項目
+    # Toggle: 補足・背景知識・用語解説
     background_items = detailed_content.get("background_knowledge", [])
+    toggle_children_background = []
+    
     if background_items:
         for item in background_items:
-            blocks.append({
+            toggle_children_background.append({
                 "object": "block",
                 "type": "bulleted_list_item",
                 "bulleted_list_item": {
@@ -236,14 +263,64 @@ def build_notion_blocks(detailed_content):
                 }
             })
     else:
-        # Add empty paragraph if no items
-        blocks.append({
+        toggle_children_background.append({
             "object": "block",
             "type": "paragraph",
             "paragraph": {
                 "rich_text": [{"type": "text", "text": {"content": "（背景知識なし）"}}]
             }
         })
+    
+    blocks.append({
+        "object": "block",
+        "type": "toggle",
+        "toggle": {
+            "rich_text": [{"type": "text", "text": {"content": "💡 補足・背景知識・用語解説"}}],
+            "children": toggle_children_background
+        }
+    })
+    
+    # Callout: 思考アウトプット
+    blocks.append({
+        "object": "block",
+        "type": "callout",
+        "callout": {
+            "rich_text": [
+                {"type": "text", "text": {"content": "✍️ 思考アウトプット"}, "annotations": {"bold": True}},
+                {"type": "text", "text": {"content": "（My Take & So What?）"}}
+            ],
+            "icon": {"emoji": "✍️"},
+            "color": "purple_background"
+        }
+    })
+    
+    # Callout content: 想定とのギャップ・発見
+    blocks.append({
+        "object": "block",
+        "type": "callout",
+        "callout": {
+            "rich_text": [
+                {"type": "text", "text": {"content": "💡 "}, "annotations": {}},
+                {"type": "text", "text": {"content": "想定とのギャップ・発見"}, "annotations": {"bold": True}}
+            ],
+            "icon": {"emoji": "💡"},
+            "color": "blue_background"
+        }
+    })
+    
+    # Callout content: So What?（自分・業務への影響/活かせること）
+    blocks.append({
+        "object": "block",
+        "type": "callout",
+        "callout": {
+            "rich_text": [
+                {"type": "text", "text": {"content": "🚀 "}, "annotations": {}},
+                {"type": "text", "text": {"content": "So What?（自分・業務への影響/活かせること）"}, "annotations": {"bold": True}}
+            ],
+            "icon": {"emoji": "🚀"},
+            "color": "yellow_background"
+        }
+    })
     
     return blocks
 
@@ -261,14 +338,29 @@ def create_notion_page(notion_api_key, database_id, title, url, category, detail
     # Build content blocks
     children = build_notion_blocks(detailed_content)
 
+    # Extract properties from detailed_content
+    importance = detailed_content.get("importance", "★2")
+    related_themes = detailed_content.get("related_themes", [])
+
+    # Build properties
+    properties = {
+        "名前": {"title": [{"text": {"content": title}}]},
+        "URL": {"url": url},
+        "カテゴリ": {"select": {"name": category}},
+        "日付": {"date": {"start": today}},
+        "ステータス": {"status": {"name": "未読"}},
+        "重要度": {"select": {"name": importance}},
+    }
+
+    # Add related themes as multi-select
+    if related_themes:
+        properties["関連テーマ"] = {
+            "multi_select": [{"name": theme} for theme in related_themes]
+        }
+
     data = {
         "parent": {"database_id": database_id},
-        "properties": {
-            "名前": {"title": [{"text": {"content": title}}]},
-            "URL": {"url": url},
-            "カテゴリ": {"select": {"name": category}},
-            "日付": {"date": {"start": today}},
-        },
+        "properties": properties,
         "children": children,
     }
 
