@@ -219,6 +219,68 @@ def generate_detailed_content(generate_func, title, url):
     }
 
 
+def generate_thinking_questions(generate_func, title, category, related_themes):
+    """Generate questions that help the user connect the news to their own thinking."""
+    if not isinstance(related_themes, list):
+        related_themes = [related_themes]
+    themes = [str(theme).strip() for theme in related_themes if theme]
+
+    prompt = (
+        "以下のニュースについて、読者が自分で考え、仕事・技術・キャリアに接続するための問いを生成してください。\n"
+        f"記事タイトル: {title}\n"
+        f"カテゴリ: {category}\n"
+        f"関連テーマ: {', '.join(themes) or 'なし'}\n\n"
+        "ニュースのカテゴリと関連テーマに応じて問いを調整し、答えそのものは書かないでください。\n"
+        "問いは3〜5個、具体的で、読者自身の経験や判断を引き出す内容にしてください。\n"
+        "必ずJSON形式のみで出力してください（マークダウン記号は含めないでください）。\n"
+        '{"thinking_questions": ["問い1", "問い2", "問い3"]}\n'
+    )
+
+    logger.info("Generating thinking questions for: %s", title)
+    resp = generate_func(prompt)
+    if resp:
+        try:
+            cleaned_resp = re.sub(r'```\s*json\s*', '', resp, flags=re.IGNORECASE)
+            cleaned_resp = re.sub(r'```\s*', '', cleaned_resp).strip()
+            json_start = cleaned_resp.find('{')
+            json_end = cleaned_resp.rfind('}') + 1
+            if json_start >= 0 and json_end > json_start:
+                result = json.loads(cleaned_resp[json_start:json_end])
+                questions = result.get("thinking_questions", [])
+                if isinstance(questions, list):
+                    questions = [str(question).strip() for question in questions if str(question).strip()]
+                    if questions:
+                        return questions[:5]
+        except Exception as e:
+            logger.warning("Failed to parse thinking questions JSON: %s", e)
+    else:
+        logger.error("Empty response from GenAI for thinking questions: %s", title)
+
+    fallback_questions = {
+        "技術": [
+            "このニュースで最も重要だと思ったことは？",
+            "この技術によって、何が変わると思う？",
+            "既存技術と比べて、どこが違う？",
+            "エンジニアの仕事にどのような影響がありそう？",
+            "自分なら何を学ぶ・試す？",
+        ],
+        "経済": [
+            "このニュースで最も重要だと思ったことは？",
+            "なぜこの変化が起きたと思う？",
+            "誰が得をして、誰が不利益を受ける？",
+            "IT業界にはどのような影響がありそう？",
+            "自分なら何を学ぶ・行動する？",
+        ],
+    }
+    return fallback_questions.get(category, [
+        "このニュースで最も重要だと思ったことは？",
+        "なぜそれが重要だと思った？",
+        "このニュースによって今後何が起こると思う？",
+        "自分の仕事・技術・キャリアにどう関係する？",
+        "このニュースから、自分なら何を学ぶ・行動する？",
+    ])
+
+
 def build_notion_blocks(content):
     """Build Notion blocks with structured analysis, strictly excluding manual entry spaces."""
     blocks = []
@@ -348,6 +410,41 @@ def build_notion_blocks(content):
             }
         })
 
+    # 4. 自分で考える質問
+    thinking_questions = content.get("thinking_questions", [])
+    if thinking_questions:
+        thinking_children = []
+        for index, question in enumerate(thinking_questions, start=1):
+            thinking_children.append({
+                "object": "block",
+                "type": "heading_3",
+                "heading_3": {
+                    "rich_text": [{
+                        "type": "text",
+                        "text": {"content": f"Q{index}. {question}"},
+                    }]
+                }
+            })
+            thinking_children.append({
+                "object": "block",
+                "type": "paragraph",
+                "paragraph": {
+                    "rich_text": [{"type": "text", "text": {"content": "→ 回答："}}]
+                }
+            })
+            thinking_children.extend([
+                {"object": "block", "type": "paragraph", "paragraph": {"rich_text": []}},
+                {"object": "block", "type": "paragraph", "paragraph": {"rich_text": []}},
+            ])
+        blocks.append({
+            "object": "block",
+            "type": "toggle",
+            "toggle": {
+                "rich_text": [{"type": "text", "text": {"content": "🧠 自分で考える"}}],
+                "children": thinking_children,
+            }
+        })
+
     return blocks
 
 
@@ -426,6 +523,16 @@ def main():
             except Exception as ex:
                 logger.exception("Error generating content for %s: %s", title, ex)
                 detailed_content = {"conclusion": title}
+
+            try:
+                detailed_content["thinking_questions"] = generate_thinking_questions(
+                    generate_func,
+                    title,
+                    category,
+                    detailed_content.get("related_themes", []),
+                )
+            except Exception as ex:
+                logger.exception("Error generating thinking questions for %s: %s", title, ex)
 
             try:
                 ok = create_notion_page(NOTION_API_KEY, NOTION_DATABASE_ID, title, link, category, detailed_content)
